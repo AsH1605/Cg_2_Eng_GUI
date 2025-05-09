@@ -1,46 +1,33 @@
 import modal
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from pathlib import Path
-from safetensors.torch import load_file  # Safetensors loading
+import click
 
-# Use App instead of Stub (deprecation fix)
-stub = modal.App(name="cg-eng-translation")
+app = modal.App("cg-eng-translator")
 
-# Define model directory for cg_eng_small
-MODEL_DIR = "/models/cg_eng_small"
-volume = modal.Volume.from_name("AST_MODAL_MONO_JAVA", create_if_missing=True)
+# Load volume with your model
+volume = modal.Volume.from_name("cg-eng-model-vol", create_if_missing=False)
 
-# Define container/image with the required dependencies
-image = modal.Image.debian_slim().pip_install(
-    "transformers", "torch", "sentencepiece", "safetensors"
-)
+# Create base image
+image = modal.Image.debian_slim().pip_install("transformers", "torch", "click")
 
-@stub.function(
+@app.function(
     image=image,
-    volumes={MODEL_DIR: volume},
-    timeout=300
+    volumes={"/model": volume},
 )
-def translate_cg_to_eng():
-    # Load tokenizer from the mounted volume
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+@modal.concurrent(max_inputs=5)
+def translate_chhattisgarhi_to_english(text: str):
+    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-    # Load model weights from safetensors
-    model_path = Path(MODEL_DIR) / "model.safetensors"
-    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_DIR)
+    model_path = "/model/AST_MODAL_MONO_JAVA/cg_eng_small"
 
-    # Hardcoded input Chhattisgarhi text (example text)
-    cg_text = "तें का करत हस?"  # Replace with actual input text for translation
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
 
-    # Tokenize input text and generate translation
-    inputs = tokenizer(cg_text, return_tensors="pt", padding=True, truncation=True)
+    inputs = tokenizer(text, return_tensors="pt")
     outputs = model.generate(**inputs)
-    eng_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    # Output the translated text
-    print("Chhattisgarhi:", cg_text)
-    print("English Translation:", eng_text)
-
-# Run locally without CLI input
-if __name__ == "__main__":
-    with stub.run():
-        translate_cg_to_eng.remote()
+@app.local_entrypoint()
+@click.option('--text', type=str, help="Text to be translated")
+def main(text: str):
+    result = translate_chhattisgarhi_to_english.remote(text)
+    print("Translation:", result)
